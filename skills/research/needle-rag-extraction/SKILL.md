@@ -1,6 +1,6 @@
 ---
 name: needle-rag-extraction
-description: Use when you need to find a small set of specific facts across a very large corpus quickly by widening retrieval, narrowing aggressively, and extracting into a fixed schema.
+description: Use when you need to find specific facts or evidence chains across a very large corpus by widening retrieval, narrowing aggressively, and extracting with provenance.
 version: 1.0.0
 author: Hermes Agent
 license: MIT
@@ -10,13 +10,15 @@ metadata:
     related_skills: [dspy, doc-corpus-workflows, llm-wiki, writing-plans]
 ---
 
-# Needle-in-Haystack RAG Extraction
+# Needle-in-Haystack QRAG Extraction
 
 ## Overview
 
-This skill adapts the intuition behind "superposition" to classical RAG.
+This skill adapts the intuition behind "superposition" and amplitude amplification to classical RAG and evidence-path discovery.
 
-The idea is not to search one way and hope. It is to represent the user's target in many retrieval forms at once, gather weak signals from many parts of the corpus in parallel, then use staged filtering and schema-bound extraction to concentrate probability mass onto the right few documents and the right few spans.
+The idea is not to search one way and hope. It is to represent the user's target in many retrieval forms at once, gather weak signals from many parts of the corpus in parallel, then use staged filtering and schema-bound extraction to concentrate probability mass onto the right few documents, spans, and evidence links.
+
+Many enterprise answers are not located in a single chunk. They live in an evidence path: for example, an invoice connected to a purchase order, connected to a contract amendment, connected to an approval record, connected to a policy rule. Miss one link and the answer is unsupported.
 
 For million-document corpora, speed comes from doing almost all work with indexes, embeddings, lexical search, metadata filters, and rerankers. The LLM is used late and narrowly, only on shortlisted spans.
 
@@ -25,8 +27,9 @@ Think of the pipeline as:
 ① fan out many hypotheses at once
 ② let multiple retrieval methods vote
 ③ amplify agreement and rare exact matches
-④ extract only from the top evidence
-⑤ return structured fields with citations and confidence
+④ expand plausible evidence links
+⑤ extract only from the top evidence paths
+⑥ return structured fields with citations, confidence, and missing-evidence signals
 
 ## When to Use
 
@@ -35,6 +38,8 @@ Use this skill when:
 - The corpus is too large for naive prompt stuffing or brute-force summarization.
 - Different documents may express the same fact with different wording.
 - You need traceable extraction with citations, not just a generative answer.
+- The answer may require multiple linked evidence objects, not a single retrieved paragraph.
+- You need explicit missing-evidence signals when a required path link is absent.
 - Latency matters more than fully open-ended reasoning.
 
 Do not use this as-is when:
@@ -52,7 +57,10 @@ Classical RAG cannot do that physically, but it can imitate the strategy operati
 - **Superposition analogue**: generate multiple representations of the same question at once.
 - **Interference analogue**: promote documents that score well across independent retrieval channels.
 - **Amplitude amplification analogue**: spend more compute on candidates that repeatedly survive each stage.
-- **Measurement analogue**: do final extraction only after the candidate set has collapsed to a tiny frontier.
+- **Quantum-walk analogue**: expand along document, entity, citation, transaction, temporal, or workflow edges to discover answer-determinative paths.
+- **Measurement analogue**: do final extraction only after the candidate set has collapsed to a tiny frontier of spans or chains.
+
+In disclosure language, candidate evidence chains are the search states and the user question compiles into a query-conditioned oracle. In the current classical implementation, that oracle is a bounded scoring function over precomputed indexes and evidence-graph features. Its cost must not scale with the full corpus at query time.
 
 ## Architecture Pattern
 
@@ -157,7 +165,7 @@ Useful scoring features:
 
 This is where "interference" happens operationally: agreement strengthens candidates.
 
-### Stage 4: Collapse to evidence spans, not documents
+### Stage 4: Collapse to evidence spans and paths, not documents
 
 Do not hand whole documents to the LLM if you can avoid it.
 
@@ -173,10 +181,25 @@ Then rerank spans with a cross-encoder or a strong reranker using:
 - local evidence density
 - contradiction risk
 
+When the question requires more than one supporting object, expand candidates into short evidence paths:
+- transaction links, such as invoice to PO to approval
+- contract links, such as MSA to amendment to order form
+- security links, such as alert to host to process to vulnerability
+- scientific links, such as claim to method to result to citation
+- policy links, such as request to rule to exception to approver
+
+Score paths by:
+- coverage of required roles
+- source quality of each link
+- temporal consistency
+- entity consistency
+- contradiction risk
+- whether any required link is missing
+
 Target outcome:
 - from 1,000,000 docs → ~200 docs
 - from ~200 docs → ~500 spans
-- from ~500 spans → top 10-30 spans per field
+- from ~500 spans → top 10-30 spans or paths per field
 
 ### Stage 5: Extract with a fixed schema, one field at a time
 
@@ -402,6 +425,9 @@ Preferred final shape:
 ```json
 {
   "entity": "Acme Corp",
+  "answer": "Latest explicit revenue is USD 12.4 billion.",
+  "evidence_chain": ["doc_882:chunk_14", "doc_1034:chunk_3"],
+  "missing_evidence": [],
   "fields": {
     "ceo_name": {
       "value": "Jane Smith",
